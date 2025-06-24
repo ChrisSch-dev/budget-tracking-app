@@ -18,7 +18,6 @@ impl AppState {
             .sum()
     }
 
-    /// Sums per category for current month, in base currency
     pub fn category_sums_this_month(&self) -> HashMap<String, f64> {
         let now = Local::now().naive_local();
         let mut sums = HashMap::new();

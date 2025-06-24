@@ -1,12 +1,11 @@
 use crate::types::*;
 use std::fs;
 use std::path::PathBuf;
-use chrono::Local;
-
+use chrono::{Local, NaiveDate};
 use csv::{ReaderBuilder, WriterBuilder};
 use std::collections::HashMap;
+use std::str::FromStr; // <----- ADD THIS LINE
 
-// For API exchange rate fetching
 pub fn fetch_exchange_rates_api(base: Currency, supported: &[Currency]) -> Result<HashMap<(Currency, Currency), f64>, String> {
     let base = base.as_str();
     let symbols: Vec<String> = supported.iter().map(|c| c.as_str().to_owned()).collect();
@@ -23,8 +22,8 @@ pub fn fetch_exchange_rates_api(base: Currency, supported: &[Currency]) -> Resul
     if let Some(rates_json) = json.get("rates") {
         for c in supported {
             if let Some(rate) = rates_json.get(c.as_str()).and_then(|v| v.as_f64()) {
-                rates.insert((base.parse().unwrap_or(Currency::USD), *c), rate);
-                rates.insert((*c, base.parse().unwrap_or(Currency::USD)), 1.0 / rate);
+                rates.insert((Currency::from_str(base).unwrap_or(Currency::USD), *c), rate);
+                rates.insert((*c, Currency::from_str(base).unwrap_or(Currency::USD)), 1.0 / rate);
             }
         }
     }
@@ -44,7 +43,7 @@ impl AppState {
         };
 
         let mut exchange_rates = HashMap::new();
-        // Example rates; in a real app, fetch from API or user input
+        // Example rates
         exchange_rates.insert((Currency::USD, Currency::USD), 1.0);
         exchange_rates.insert((Currency::EUR, Currency::USD), 1.1);
         exchange_rates.insert((Currency::USD, Currency::EUR), 0.91);
@@ -60,7 +59,7 @@ impl AppState {
             input_desc: String::new(),
             input_amt: String::new(),
             input_cat: String::new(),
-            input_date: Local::now().date_naive(),
+            input_date_str: Local::now().date_naive().to_string(),
             input_recurring: false,
             input_currency: Currency::USD,
             search_term: String::new(),
@@ -101,7 +100,6 @@ impl AppState {
         }
     }
 
-    /// Fetch live exchange rates and update state
     pub fn fetch_exchange_rates(&mut self) {
         match fetch_exchange_rates_api(self.base_currency, Currency::all()) {
             Ok(rates) => {
@@ -140,7 +138,7 @@ impl AppState {
             let date = chrono::NaiveDate::parse_from_str(&record[0], "%Y-%m-%d")?;
             let description = record[1].to_string();
             let amount: f64 = record[2].parse()?;
-            let currency = Currency::all().iter().find(|c| c.as_str() == record[3]).copied().unwrap_or(Currency::USD);
+            let currency = Currency::all().iter().find(|c| c.as_str() == &record[3]).copied().unwrap_or(Currency::USD);
             let category = record[4].to_string();
             let recurring: bool = record[5].parse()?;
             self.data.transactions.push(Transaction {

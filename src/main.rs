@@ -1,11 +1,15 @@
 mod app;
-use app::BudgetApp;
+mod gui;
+mod types;
+mod utils;
+mod data;
+mod analytics;
 
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions::default();
     eframe::run_native(
-        "Advanced Finance Tracker",
+        "Budget Tracking App",
         native_options,
-        Box::new(|_cc| Box::new(BudgetApp::new(None))),
+        Box::new(|_cc| Box::new(app::BudgetApp::new(None))),
     )
 }

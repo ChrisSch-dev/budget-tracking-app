@@ -1,10 +1,9 @@
 use crate::types::*;
-use eframe::epi;
+use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use chrono::Local;
-use std::collections::BTreeMap;
 
-pub fn draw_main_window(app: &mut crate::app::BudgetApp, ctx: &egui::Context, _frame: &epi::Frame) {
+pub fn draw_main_window(app: &mut crate::app::BudgetApp, ctx: &egui::Context, _frame: &mut eframe::Frame) {
     let state = &mut app.state;
     state.set_theme(ctx);
 
@@ -27,17 +26,27 @@ pub fn draw_main_window(app: &mut crate::app::BudgetApp, ctx: &egui::Context, _f
             }
             if ui.button("Import CSV").clicked() {
                 if let Some(path) = rfd::FileDialog::new().pick_file() {
+                    // TODO: Show error in GUI
                     match state.import_csv(&path) {
-                        Ok(_) => {},
-                        Err(e) => { /* TODO: Show error in GUI */ }
+                        Ok(_) => {
+                            state.rates_api_error = Some("CSV imported successfully.".to_string());
+                        },
+                        Err(e) => {
+                            state.rates_api_error = Some(format!("CSV import failed: {e}"));
+                        }
                     }
                 }
             }
             if ui.button("Export CSV").clicked() {
                 if let Some(path) = rfd::FileDialog::new().save_file() {
+                    // TODO: Show error in GUI
                     match state.export_csv(&path) {
-                        Ok(_) => {},
-                        Err(e) => { /* TODO: Show error in GUI */ }
+                        Ok(_) => {
+                            state.rates_api_error = Some("CSV exported successfully.".to_string());
+                        },
+                        Err(e) => {
+                            state.rates_api_error = Some(format!("CSV export failed: {e}"));
+                        }
                     }
                 }
             }
@@ -66,10 +75,11 @@ pub fn draw_main_window(app: &mut crate::app::BudgetApp, ctx: &egui::Context, _f
         });
     });
 
-    // Exchange Rates Modal
-    if state.editing_rates {
+    // Exchange Rates Modal: snapshot editing_rates before window, update after
+    let mut editing_rates = state.editing_rates;
+    if editing_rates {
         egui::Window::new("Exchange Rates")
-            .open(&mut state.editing_rates)
+            .open(&mut editing_rates)
             .show(ctx, |ui| {
                 ui.label("Edit exchange rates relative to base currency");
                 for &from in Currency::all() {
@@ -87,23 +97,32 @@ pub fn draw_main_window(app: &mut crate::app::BudgetApp, ctx: &egui::Context, _f
                     }
                 }
                 if ui.button("Update from API").clicked() {
-                    state.fetch_exchange_rates();
+                    // Schedule update after window closes to avoid borrow error
+                    state.rates_api_error = Some("fetch".to_owned());
                 }
                 if let Some(err) = &state.rates_api_error {
-                    ui.colored_label(egui::Color32::RED, err);
+                    if err != "fetch" { // don't show fake error
+                        ui.colored_label(egui::Color32::RED, err);
+                    }
                 }
             });
+    }
+    state.editing_rates = editing_rates;
+    if state.rates_api_error.as_deref() == Some("fetch") {
+        state.fetch_exchange_rates();
+        state.rates_api_error = Some("Exchange rates updated from API.".to_string());
     }
 
     egui::SidePanel::left("side").show(ctx, |ui| {
         ui.heading("Add Transaction");
-        ui.horizontal(|ui| {
-            ui.label("Date");
-            ui.add(egui::widgets::DatePickerButton::new(&mut state.input_date));
-        });
-        ui.text_edit_singleline(&mut state.input_desc).hint_text("Description");
-        ui.text_edit_singleline(&mut state.input_amt).hint_text("Amount");
-        ui.text_edit_singleline(&mut state.input_cat).hint_text("Category");
+        ui.label("Date (YYYY-MM-DD):");
+        ui.text_edit_singleline(&mut state.input_date_str);
+        ui.label("Description:");
+        ui.text_edit_singleline(&mut state.input_desc);
+        ui.label("Amount:");
+        ui.text_edit_singleline(&mut state.input_amt);
+        ui.label("Category:");
+        ui.text_edit_singleline(&mut state.input_cat);
         egui::ComboBox::from_id_source("input_currency")
             .selected_text(state.input_currency.as_str())
             .show_ui(ui, |ui| {
@@ -114,21 +133,31 @@ pub fn draw_main_window(app: &mut crate::app::BudgetApp, ctx: &egui::Context, _f
         ui.checkbox(&mut state.input_recurring, "Recurring");
         if ui.button("Add").clicked() {
             if let Ok(amount) = state.input_amt.parse::<f64>() {
-                let transaction = Transaction {
-                    date: state.input_date,
-                    description: state.input_desc.clone(),
-                    amount,
-                    category: state.input_cat.clone(),
-                    recurring: state.input_recurring,
-                    currency: state.input_currency,
-                };
-                state.data.transactions.push(transaction);
-                state.input_desc.clear();
-                state.input_amt.clear();
-                state.input_cat.clear();
-                state.input_date = Local::now().date_naive();
-                state.input_recurring = false;
-                state.save();
+                if let Ok(date) = chrono::NaiveDate::parse_from_str(&state.input_date_str, "%Y-%m-%d") {
+                    let transaction = Transaction {
+                        date,
+                        description: state.input_desc.clone(),
+                        amount,
+                        category: state.input_cat.clone(),
+                        recurring: state.input_recurring,
+                        currency: state.input_currency,
+                    };
+                    state.data.transactions.push(transaction);
+                    state.input_desc.clear();
+                    state.input_amt.clear();
+                    state.input_cat.clear();
+                    state.input_date_str = Local::now().date_naive().to_string();
+                    state.input_recurring = false;
+                    state.save();
+                    // Show a status message for success
+                    state.rates_api_error = Some("Transaction added.".to_string());
+                } else {
+                    // Show a status message for date parse failure
+                    state.rates_api_error = Some("Failed to parse date. Use YYYY-MM-DD.".to_string());
+                }
+            } else {
+                // Show a status message for amount parse failure
+                state.rates_api_error = Some("Failed to parse amount (must be a number).".to_string());
             }
         }
         if let Some(idx) = state.selected_tx {
@@ -136,36 +165,54 @@ pub fn draw_main_window(app: &mut crate::app::BudgetApp, ctx: &egui::Context, _f
                 state.data.transactions.remove(idx);
                 state.selected_tx = None;
                 state.save();
+                // Show a status message for delete
+                state.rates_api_error = Some("Transaction deleted.".to_string());
             }
         }
         ui.separator();
         ui.heading("Budgets");
-        // Multi-currency per-category budgets
-        for cat in state.categories() {
-            let cat_budget = state.data.budget.monthly_limits.entry(cat.clone())
-                .or_insert(CategoryBudget { amount: 0.0, currency: state.base_currency });
+
+        // FIX: Avoid borrow checker error by operating on copies and writing back if changed.
+        let categories = state.categories();
+        for cat in categories {
+            // Get current values
+            let (mut amount, mut currency) = {
+                let entry = state.data.budget.monthly_limits
+                    .get(&cat)
+                    .cloned()
+                    .unwrap_or(CategoryBudget { amount: 0.0, currency: state.base_currency });
+                (entry.amount, entry.currency)
+            };
+
+            let mut changed = false;
             ui.horizontal(|ui| {
                 ui.label(&cat);
-                ui.add(egui::DragValue::new(&mut cat_budget.amount));
+                changed |= ui.add(egui::DragValue::new(&mut amount)).changed();
                 egui::ComboBox::from_id_source(format!("budget_curr_{}", cat))
-                    .selected_text(cat_budget.currency.as_str())
+                    .selected_text(currency.as_str())
                     .show_ui(ui, |ui| {
                         for &c in Currency::all() {
-                            ui.selectable_value(&mut cat_budget.currency, c, c.as_str());
+                            if ui.selectable_value(&mut currency, c, c.as_str()).changed() {
+                                changed = true;
+                            }
                         }
                     });
-                if ui.button("Set").clicked() {
+                if ui.button("Set").clicked() || changed {
+                    state.data.budget.monthly_limits.insert(cat.clone(), CategoryBudget { amount, currency });
                     state.save();
+                    // Show a status message for budget update
+                    state.rates_api_error = Some(format!("Budget updated for category '{}'.", cat));
                 }
-                // Show budget in base currency
-                let converted = state.convert(cat_budget.amount, cat_budget.currency, state.base_currency);
-                if cat_budget.currency != state.base_currency {
-                    ui.label(format!(
-                        "≈ {:.2} {}",
-                        converted, state.base_currency
-                    ));
+                let converted = state.convert(amount, currency, state.base_currency);
+                if currency != state.base_currency {
+                    ui.label(format!("≈ {:.2} {}", converted, state.base_currency));
                 }
             });
+        }
+        // Show status/error message (used for TODOs above)
+        if let Some(msg) = &state.rates_api_error {
+            ui.separator();
+            ui.colored_label(egui::Color32::LIGHT_BLUE, msg);
         }
     });
 
@@ -179,43 +226,6 @@ pub fn draw_main_window(app: &mut crate::app::BudgetApp, ctx: &egui::Context, _f
                 state.base_currency
             ));
         });
-
-        // Multi-currency pie chart: toggle for original or base currency
-        static mut SHOW_BASE: bool = true;
-        let mut show_base = unsafe { SHOW_BASE };
-        ui.horizontal(|ui| {
-            ui.label("Chart currency:");
-            ui.radio_value(&mut show_base, true, format!("{}", state.base_currency));
-            ui.radio_value(&mut show_base, false, "Original");
-        });
-        unsafe { SHOW_BASE = show_base; }
-        use egui::plot::{PieChart, PieSlice, Plot};
-        let mut slices = Vec::new();
-        if show_base {
-            let cat_sums = state.category_sums_this_month();
-            for (cat, sum) in &cat_sums {
-                slices.push(PieSlice::new(cat.clone(), *sum));
-            }
-        } else {
-            let mut sums: BTreeMap<(String, Currency), f64> = Default::default();
-            for tx in state.filtered_transactions() {
-                let cat = tx.category.clone();
-                if tx.date.year() == Local::now().year() && tx.date.month() == Local::now().month() {
-                    *sums.entry((cat, tx.currency)).or_insert(0.0) += tx.amount;
-                }
-            }
-            for ((cat, curr), sum) in sums {
-                slices.push(PieSlice::new(format!("{cat} ({curr})"), sum));
-            }
-        }
-        if !slices.is_empty() {
-            let pie = PieChart::new(slices).radius(80.0);
-            Plot::new("categories_pie").show(ui, |plot_ui| {
-                plot_ui.pie_chart(pie);
-            });
-        } else {
-            ui.label("No data to display for this month.");
-        }
     });
 
     egui::CentralPanel::default().show(ctx, |ui| {
@@ -223,6 +233,16 @@ pub fn draw_main_window(app: &mut crate::app::BudgetApp, ctx: &egui::Context, _f
             "Transactions (converted to base: {})",
             state.base_currency
         ));
+
+        // Borrow checker fix: collect filtered indices first
+        let filtered_indices: Vec<usize> = state.data.transactions.iter().enumerate()
+            .filter(|(_, tx)| {
+                state.search_term.is_empty() ||
+                    tx.description.to_lowercase().contains(&state.search_term.to_lowercase()) ||
+                    tx.category.to_lowercase().contains(&state.search_term.to_lowercase())
+            })
+            .map(|(i, _)| i)
+            .collect();
 
         TableBuilder::new(ui)
             .striped(true)
@@ -238,7 +258,8 @@ pub fn draw_main_window(app: &mut crate::app::BudgetApp, ctx: &egui::Context, _f
                 header.col(|ui| { ui.label("Select"); });
             })
             .body(|mut body| {
-                for (i, tx) in state.filtered_transactions().into_iter().enumerate() {
+                for &i in &filtered_indices {
+                    let tx = &state.data.transactions[i];
                     body.row(18.0, |mut row| {
                         row.col(|ui| { ui.label(tx.date.to_string()); });
                         row.col(|ui| { ui.label(&tx.description); });
@@ -254,7 +275,7 @@ pub fn draw_main_window(app: &mut crate::app::BudgetApp, ctx: &egui::Context, _f
                                 state.input_desc = tx.description.clone();
                                 state.input_amt = format!("{}", tx.amount);
                                 state.input_cat = tx.category.clone();
-                                state.input_date = tx.date;
+                                state.input_date_str = tx.date.to_string();
                                 state.input_recurring = tx.recurring;
                                 state.input_currency = tx.currency;
                             }

@@ -1,9 +1,9 @@
 use chrono::NaiveDate;
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::str::FromStr;
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Hash, Debug, Copy)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Currency {
     USD,
     EUR,
@@ -36,6 +36,21 @@ impl std::fmt::Display for Currency {
 impl Default for Currency {
     fn default() -> Self {
         Currency::USD
+    }
+}
+
+impl FromStr for Currency {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Currency, ()> {
+        match s {
+            "USD" => Ok(Currency::USD),
+            "EUR" => Ok(Currency::EUR),
+            "GBP" => Ok(Currency::GBP),
+            "JPY" => Ok(Currency::JPY),
+            "CHF" => Ok(Currency::CHF),
+            _ => Err(()),
+        }
     }
 }
 
@@ -78,15 +93,15 @@ pub struct AppState {
     pub input_desc: String,
     pub input_amt: String,
     pub input_cat: String,
-    pub input_date: NaiveDate,
+    pub input_date_str: String, // changed from NaiveDate to user-editable string
     pub input_recurring: bool,
     pub input_currency: Currency,
     pub search_term: String,
-    pub file_path: Option<PathBuf>,
+    pub file_path: Option<std::path::PathBuf>,
     pub selected_tx: Option<usize>,
     pub theme: Theme,
     pub show_import_modal: bool,
-    pub import_path: Option<PathBuf>,
+    pub import_path: Option<std::path::PathBuf>,
     pub base_currency: Currency,
     pub exchange_rates: HashMap<(Currency, Currency), f64>,
     pub editing_rates: bool,
